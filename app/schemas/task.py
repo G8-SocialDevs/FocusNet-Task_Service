@@ -9,7 +9,7 @@ class TaskCreate(BaseModel):
     Priority: Optional[int] = None
     StartTimestamp: Optional[datetime] = None  # Timestamp en entrada
     EndTimestamp: Optional[datetime] = None  # Timestamp en entrada
-    RecurringStart: bool | None = False
+    RecurringStart: bool = False
     RecurringID: Optional[int] = None
 
 class TaskResponse(BaseModel):
