@@ -16,3 +16,24 @@ class TaskResponse(BaseModel):
     message: str
     TaskID: int
     CreationDate: datetime
+
+class TaskSearchResponse(BaseModel):
+    TaskID: int
+    CreatorID: int
+    Title: str
+    Description: Optional[str]
+    Priority: Optional[int]
+    RecurringStart: bool
+    StartTimestampID: int
+    EndTimeStampID: int
+    RecurringID: Optional[int]
+
+class TaskUpdateRequest(BaseModel):
+    TaskID: int
+    Title: str
+    Description: Optional[str] = None
+    Priority: Optional[int] = None
+    RecurringStart: bool
+    StartTimestamp: datetime
+    EndTimestamp: datetime
+    RecurringID: Optional[int] = None
