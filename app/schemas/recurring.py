@@ -53,3 +53,8 @@ class RecurringCreateRequest(BaseModel):
             if invalid_days:
                 raise ValueError(f"DayFrequency contiene valores inválidos: {', '.join(invalid_days)}. Deben estar entre 1 y 31.")
         return value
+    
+class RecurringUpdateRequest(BaseModel):
+    Title: Optional[str] = None
+    Description: Optional[str] = None
+    Priority: Optional[int] = None
