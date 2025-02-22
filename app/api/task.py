@@ -1,74 +1,142 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
+import calendar as cal
 from app.database import get_db
 from app.models.task import Task
 from app.models.calendar import Calendar
-from app.schemas.task import TaskCreate, TaskResponse, TaskSearchResponse, TaskUpdateRequest
+from app.models.recurring import Recurring
+from app.schemas.task import TaskResponse, TaskSearchResponse, TaskUpdateRequest, TaskCreateRequest
 
 router = APIRouter()
 
-@router.post("/create_task", response_model=TaskResponse)
-async def create_task(task: TaskCreate, db: Session = Depends(get_db)):
-    start_calendar_id, end_calendar_id, duration = None, None, None
-
-    # Insertar StartTimestamp en Calendar si existe
-    if task.StartTimestamp:
-        start_calendar = Calendar(
-            Date=task.StartTimestamp,
-            Year=task.StartTimestamp.year,
-            Month=task.StartTimestamp.month,
-            Day=task.StartTimestamp.day,
-            DayName=task.StartTimestamp.strftime("%A"),
-            Hour=task.StartTimestamp.hour,
-            Minute=task.StartTimestamp.minute
+@router.post("/task/create_task", response_model=dict)
+async def create_task(task_data: TaskCreateRequest, db: Session = Depends(get_db)):
+    def create_calendar_entry(date: datetime):
+        return Calendar(
+            Date=date,
+            Year=date.year,
+            Month=date.month,
+            Day=date.day,
+            DayName=date.strftime('%A'),
+            Hour=date.hour,
+            Minute=date.minute
         )
-        db.add(start_calendar)
-        db.flush()  # Obtener ID antes de commit
-        start_calendar_id = start_calendar.CalendarID
 
-    # Insertar EndTimestamp en Calendar si existe
-    if task.EndTimestamp:
-        end_calendar = Calendar(
-            Date=task.EndTimestamp,
-            Year=task.EndTimestamp.year,
-            Month=task.EndTimestamp.month,
-            Day=task.EndTimestamp.day,
-            DayName=task.EndTimestamp.strftime("%A"),
-            Hour=task.EndTimestamp.hour,
-            Minute=task.EndTimestamp.minute
+    duration_minutes = int((task_data.EndTimestamp - task_data.StartTimestamp).total_seconds() / 60)
+    recurring_id = None
+
+    def generate_recurrence_dates(start_date: datetime, occurrences: int):
+        if task_data.Frequency == "diaria":
+            return [start_date + timedelta(days=i) for i in range(occurrences)]
+        elif task_data.Frequency == "semanal":
+            return [start_date + timedelta(weeks=i) for i in range(occurrences)]
+        elif task_data.Frequency == "mensual":
+            dates, current_date = [], start_date
+            for _ in range(occurrences):
+                dates.append(current_date)
+                month = current_date.month % 12 + 1
+                year = current_date.year + (1 if current_date.month == 12 else 0)
+                day = min(current_date.day, cal.monthrange(year, month)[1])
+                current_date = datetime(year, month, day, current_date.hour, current_date.minute)
+            return dates
+        elif task_data.DayNameFrequency:
+            weekdays = {"Lu": 0, "Ma": 1, "Mi": 2, "Ju": 3, "Vi": 4, "Sa": 5, "Do": 6}
+            target_days = {weekdays[day.strip()] for day in task_data.DayNameFrequency.split(",")}
+            dates, current_date = [], start_date
+            while len(dates) < occurrences:
+                if current_date.weekday() in target_days:
+                    dates.append(current_date)
+                current_date += timedelta(days=1)
+            return dates
+        elif task_data.DayFrequency:
+            target_days = {int(day.strip()) for day in task_data.DayFrequency.split(",")}
+            dates, current_date = [], start_date
+            while len(dates) < occurrences:
+                if current_date.day in target_days:
+                    dates.append(current_date)
+                current_date += timedelta(days=1)
+            return dates
+        return []
+
+    if task_data.RecurringStart and any([task_data.Frequency, task_data.DayNameFrequency, task_data.DayFrequency]):
+        new_recurring = Recurring(
+            Title=task_data.Title,
+            Description=task_data.Description,
+            Priority=task_data.Priority,
+            CreatorID=task_data.CreatorID,
+            Frequency=task_data.Frequency,
+            DayNameFrequency=task_data.DayNameFrequency,
+            DayFrequency=task_data.DayFrequency
         )
-        db.add(end_calendar)
-        db.flush()  # Obtener ID antes de commit
-        end_calendar_id = end_calendar.CalendarID
+        db.add(new_recurring)
+        db.flush() 
+        recurring_id = new_recurring.RecurringID
 
-    # Calcular duración en minutos si ambas fechas están presentes
-    if task.StartTimestamp and task.EndTimestamp:
-        duration = (task.EndTimestamp - task.StartTimestamp).total_seconds() / 60
+        recurrence_dates = generate_recurrence_dates(task_data.StartTimestamp, task_data.Occurrences)
 
-    # Crear la tarea
-    new_task = Task(
-        CreatorID=task.CreatorID,
-        Title=task.Title,
-        Description=task.Description,
-        Priority=task.Priority,
-        StartTimestampID=start_calendar_id,
-        EndTimeStampID=end_calendar_id,
-        MinutesDuration=duration,
-        RecurringStart=task.RecurringStart,
-        RecurringID=task.RecurringID,
-        CreationDate=datetime.utcnow()
-    )
+        calendars = []
+        for date in recurrence_dates:
+            start_date = date
+            end_date = date + (task_data.EndTimestamp - task_data.StartTimestamp)
+            calendars.extend([create_calendar_entry(start_date), create_calendar_entry(end_date)])
 
-    db.add(new_task)
-    db.commit()
-    db.refresh(new_task)
+        db.add_all(calendars)
+        db.flush()
 
-    return TaskResponse(
-        message="Tarea registrada con éxito",
-        TaskID=new_task.TaskID,
-        CreationDate=new_task.CreationDate
-    )
+        calendar_ids = [calendar.CalendarID for calendar in calendars]
+        paired_calendar_ids = [(calendar_ids[i], calendar_ids[i + 1]) for i in range(0, len(calendar_ids), 2)]
+
+        tasks = [
+            Task(
+                CreatorID=task_data.CreatorID,
+                Title=task_data.Title,
+                Description=task_data.Description,
+                Priority=task_data.Priority,
+                StartTimestampID=start_id,
+                EndTimeStampID=end_id,
+                MinutesDuration=duration_minutes,
+                RecurringStart=True,
+                RecurringID=recurring_id,
+                CreationDate=datetime.utcnow()
+            )
+            for start_id, end_id in paired_calendar_ids
+        ]
+
+        db.add_all(tasks)
+        db.commit()
+
+        return {
+            "message": "Tareas recurrentes creadas con éxito",
+            "RecurringID": recurring_id,
+            "Tareas_creadas": len(tasks)
+        }
+
+    else:
+        start_calendar = create_calendar_entry(task_data.StartTimestamp)
+        end_calendar = create_calendar_entry(task_data.EndTimestamp)
+        db.add_all([start_calendar, end_calendar])
+        db.flush()
+
+        new_task = Task(
+            CreatorID=task_data.CreatorID,
+            Title=task_data.Title,
+            Description=task_data.Description,
+            Priority=task_data.Priority,
+            StartTimestampID=start_calendar.CalendarID,
+            EndTimeStampID=end_calendar.CalendarID,
+            MinutesDuration=duration_minutes,
+            RecurringStart=False,
+            CreationDate=datetime.utcnow()
+        )
+
+        db.add(new_task)
+        db.commit()
+
+        return {
+            "message": "Tarea única creada con éxito",
+            "TaskID": new_task.TaskID
+        }
 
 @router.get("/get_tasks")
 def get_tasks(db: Session = Depends(get_db)):

@@ -4,7 +4,6 @@ from datetime import datetime
 from app.database import get_db
 from app.models.task import Task
 from app.models.calendar import Calendar
-from app.schemas.task import TaskCreate, TaskResponse
 
 router = APIRouter()
 

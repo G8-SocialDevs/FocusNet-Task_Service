@@ -1,16 +1,25 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, Field, model_validator
 from datetime import datetime
 from typing import Optional
 
-class TaskCreate(BaseModel):
-    CreatorID: int
+class TaskCreateRequest(BaseModel):
     Title: str
     Description: Optional[str] = None
     Priority: Optional[int] = None
-    StartTimestamp: Optional[datetime] = None  # Timestamp en entrada
-    EndTimestamp: Optional[datetime] = None  # Timestamp en entrada
+    CreatorID: int
+    StartTimestamp: datetime
+    EndTimestamp: datetime
     RecurringStart: bool = False
-    RecurringID: Optional[int] = None
+    Frequency: Optional[str] = None
+    DayNameFrequency: Optional[str] = None
+    DayFrequency: Optional[str] = None
+    Occurrences: Optional[int] = 30
+
+    @model_validator(mode='after')
+    def validate_end_after_start(self):
+        if self.EndTimestamp <= self.StartTimestamp:
+            raise ValueError("EndTimestamp debe ser posterior a StartTimestamp.")
+        return self
 
 class TaskResponse(BaseModel):
     message: str
