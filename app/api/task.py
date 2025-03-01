@@ -6,7 +6,9 @@ from app.database import get_db
 from app.models.task import Task
 from app.models.calendar import Calendar
 from app.models.recurring import Recurring
-from app.schemas.task import TaskResponse, TaskSearchResponse, TaskUpdateRequest, TaskCreateRequest
+from app.models.user import User
+from app.models.invitation import Invitation
+from app.schemas.task import TaskResponse, TaskSearchResponse, TaskUpdateRequest, TaskCreateRequest, Attendee
 
 router = APIRouter()
 
@@ -25,6 +27,14 @@ async def create_task(task_data: TaskCreateRequest, db: Session = Depends(get_db
 
     duration_minutes = int((task_data.EndTimestamp - task_data.StartTimestamp).total_seconds() / 60)
     recurring_id = None
+
+    guest_ids = task_data.GuestIDs or []
+    if guest_ids:
+        existing_users = {user.UserID for user in db.query(User).filter(User.UserID.in_(guest_ids)).all()}
+        invalid_users = set(guest_ids) - existing_users
+        if invalid_users:
+            raise HTTPException(status_code=400, detail=f"Usuarios no encontrados: {', '.join(map(str, invalid_users))}")
+
 
     def generate_recurrence_dates(start_date: datetime, occurrences: int):
         if task_data.Frequency == "diaria":
@@ -106,10 +116,25 @@ async def create_task(task_data: TaskCreateRequest, db: Session = Depends(get_db
         db.add_all(tasks)
         db.commit()
 
+        invitations = [
+            Invitation(
+                CreatorID=task_data.CreatorID,
+                GuestID=guest_id,
+                RecurringID=recurring_id,
+                Status="Pendiente",
+                Date=datetime.utcnow()
+            )
+            for guest_id in guest_ids
+        ]
+
+        db.add_all(invitations)
+        db.commit()
+
         return {
             "message": "Tareas recurrentes creadas con éxito",
             "RecurringID": recurring_id,
-            "Tareas_creadas": len(tasks)
+            "Tareas_creadas": len(tasks),
+            "Invitaciones_creadas": len(invitations)
         }
 
     else:
@@ -133,9 +158,24 @@ async def create_task(task_data: TaskCreateRequest, db: Session = Depends(get_db
         db.add(new_task)
         db.commit()
 
+        invitations = [
+            Invitation(
+                CreatorID=task_data.CreatorID,
+                GuestID=guest_id,
+                TaskID=new_task.TaskID,
+                Status="Pendiente",
+                Date=datetime.utcnow()
+            )
+            for guest_id in guest_ids
+        ]
+
+        db.add_all(invitations)
+        db.commit()
+
         return {
             "message": "Tarea única creada con éxito",
-            "TaskID": new_task.TaskID
+            "TaskID": new_task.TaskID,
+            "Invitaciones_creadas": len(invitations)
         }
 
 @router.get("/get_tasks")
@@ -143,21 +183,90 @@ def get_tasks(db: Session = Depends(get_db)):
     return db.query(Task).all()
 
 @router.get("/search_task/", response_model=TaskSearchResponse)
-def search_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(Task).filter(Task.TaskID == task_id).first()
+def search_task(task_id: int, user_id: int, db: Session = Depends(get_db)):
+
+    task = db.query(Task).filter(Task.TaskID == task_id, Task.CreatorID == user_id).first()
+
+    if not task:
+        task = db.query(Task).join(Invitation, Task.TaskID == Invitation.TaskID).filter(
+            Invitation.GuestID == user_id,
+            Invitation.TaskID == task_id,
+            Invitation.Status == "Aceptada"
+        ).first()
+
     if not task:
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
-    
-    return task
+
+    creator = db.query(User).filter(User.UserID == task.CreatorID).first()
+    attendees = [{"UserID": creator.UserID, "Username": creator.UserName}] if creator else []
+
+    accepted_guests = db.query(User).join(Invitation, User.UserID == Invitation.GuestID).filter(
+        Invitation.TaskID == task.TaskID,
+        Invitation.Status == "Aceptada"
+    ).all()
+
+    attendees += [{"UserID": guest.UserID, "Username": guest.UserName} for guest in accepted_guests]
+
+    return {
+        "TaskID": task.TaskID,
+        "CreatorID": task.CreatorID,
+        "Title": task.Title,
+        "Description": task.Description,
+        "Priority": task.Priority,
+        "StartTimestampID": task.StartTimestampID,
+        "EndTimeStampID": task.EndTimeStampID,
+        "RecurringStart": task.RecurringStart,
+        "RecurringID": task.RecurringID,
+        "attendees": attendees
+    }
 
 @router.get("/list_user_tasks/{user_id}", response_model=list[TaskSearchResponse])
 async def list_user_tasks(user_id: int, db: Session = Depends(get_db)):
-    tasks = db.query(Task).filter(Task.CreatorID == user_id).all()
     
-    if not tasks:
-        raise HTTPException(status_code=404, detail="No se encontraron tareas para el usuario")
-    
-    return tasks
+    created_tasks = db.query(Task).filter(Task.CreatorID == user_id).all()
+
+    accepted_invitations = db.query(Invitation).filter(
+        Invitation.GuestID == user_id,
+        Invitation.Status == "Aceptada"
+    ).all()
+
+    accepted_tasks = db.query(Task).filter(Task.TaskID.in_(
+        [inv.TaskID for inv in accepted_invitations if inv.TaskID]
+    )).all()
+
+    accepted_recurring_tasks = db.query(Task).filter(Task.RecurringID.in_(
+        [inv.RecurringID for inv in accepted_invitations if inv.RecurringID]
+    )).all()
+
+    all_tasks = created_tasks + accepted_tasks + accepted_recurring_tasks
+    unique_tasks = {task.TaskID: task for task in all_tasks}.values()
+
+    result = []
+    for task in unique_tasks:
+        creator = db.query(User).filter(User.UserID == task.CreatorID).first()
+        attendees = [{"UserID": creator.UserID, "Username": creator.UserName}] if creator else []
+
+        accepted_guests = db.query(User).join(Invitation, User.UserID == Invitation.GuestID).filter(
+            Invitation.TaskID == task.TaskID,
+            Invitation.Status == "Aceptada"
+        ).all()
+
+        attendees += [{"UserID": guest.UserID, "Username": guest.UserName} for guest in accepted_guests]
+
+        result.append({
+            "TaskID": task.TaskID,
+            "CreatorID": task.CreatorID,
+            "Title": task.Title,
+            "Description": task.Description,
+            "Priority": task.Priority,
+            "StartTimestampID": task.StartTimestampID,
+            "EndTimeStampID": task.EndTimeStampID,
+            "RecurringStart": task.RecurringStart,
+            "RecurringID": task.RecurringID,
+            "attendees": attendees
+        })
+
+    return result
 
 @router.put("/update", response_model=dict)
 async def update_task(task: TaskUpdateRequest, db: Session = Depends(get_db)):
@@ -207,6 +316,32 @@ async def update_task(task: TaskUpdateRequest, db: Session = Depends(get_db)):
     
     db.commit()
     db.refresh(db_task)
+
+    if task.GuestIDs is not None:
+        existing_invitations = db.query(Invitation).filter(Invitation.TaskID == task.TaskID).all()
+        current_guest_ids = {inv.GuestID for inv in existing_invitations} 
+        new_guest_ids = set(task.GuestIDs)
+
+        to_remove = current_guest_ids - new_guest_ids
+        to_add = new_guest_ids - current_guest_ids
+
+        if to_remove:
+            db.query(Invitation).filter(Invitation.TaskID == task.TaskID, Invitation.GuestID.in_(to_remove)).delete(synchronize_session=False)
+
+        new_invitations = [
+            Invitation(
+                CreatorID=db_task.CreatorID,
+                GuestID=guest_id,
+                TaskID=task.TaskID,
+                Status="Pendiente",
+                Date=datetime.utcnow()
+            )
+            for guest_id in to_add
+        ]
+
+        db.add_all(new_invitations)
+
+    db.commit()
     
     return {"message": "Tarea actualizada satisfactoriamente"}
 
@@ -221,17 +356,23 @@ async def delete_task(task_id: int, db: Session = Depends(get_db)):
     start_calendar_id = db_task.StartTimestampID
     end_calendar_id = db_task.EndTimeStampID
 
+    db.query(Invitation).filter(Invitation.TaskID == task_id).delete(synchronize_session=False)
+
     db.delete(db_task)
 
     start_calendar = db.query(Calendar).filter(Calendar.CalendarID == start_calendar_id).first()
     end_calendar = db.query(Calendar).filter(Calendar.CalendarID == end_calendar_id).first()
 
-    if start_calendar and not start_calendar.tasks_start:
-        db.delete(start_calendar)
+    if start_calendar:
+        linked_tasks = db.query(Task).filter(Task.StartTimestampID == start_calendar_id).count()
+        if linked_tasks == 0:
+            db.delete(start_calendar)
 
-    if end_calendar and not end_calendar.tasks_end:
-        db.delete(end_calendar)
+    if end_calendar:
+        linked_tasks = db.query(Task).filter(Task.EndTimeStampID == end_calendar_id).count()
+        if linked_tasks == 0:
+            db.delete(end_calendar)
 
     db.commit()
 
-    return {"message": "Tarea eliminada satisfactoriamente"}
+    return {"message": "Tarea e invitaciones eliminadas satisfactoriamente"}

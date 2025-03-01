@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator, Field, model_validator
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 class TaskCreateRequest(BaseModel):
     Title: str
@@ -14,6 +14,7 @@ class TaskCreateRequest(BaseModel):
     DayNameFrequency: Optional[str] = None
     DayFrequency: Optional[str] = None
     Occurrences: Optional[int] = 30
+    GuestIDs: Optional[List[int]] = None
 
     @model_validator(mode='after')
     def validate_end_after_start(self):
@@ -26,6 +27,10 @@ class TaskResponse(BaseModel):
     TaskID: int
     CreationDate: datetime
 
+class Attendee(BaseModel):
+    UserID: int
+    Username: str
+
 class TaskSearchResponse(BaseModel):
     TaskID: int
     CreatorID: int
@@ -36,6 +41,7 @@ class TaskSearchResponse(BaseModel):
     StartTimestampID: int
     EndTimeStampID: int
     RecurringID: Optional[int]
+    attendees: List[Attendee]
 
 class TaskUpdateRequest(BaseModel):
     TaskID: int
@@ -46,3 +52,4 @@ class TaskUpdateRequest(BaseModel):
     StartTimestamp: datetime
     EndTimestamp: datetime
     RecurringID: Optional[int] = None
+    GuestIDs: Optional[List[int]] = None
