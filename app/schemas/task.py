@@ -31,6 +31,16 @@ class Attendee(BaseModel):
     UserID: int
     Username: str
 
+class RecurringResponse(BaseModel):
+    RecurringID: int
+    Title: str
+    Description: Optional[str]
+    Priority: Optional[int]
+    CreatorID: int
+    Frequency: Optional[str]
+    DayNameFrequency: Optional[str]
+    DayFrequency: Optional[str]
+
 class TaskSearchResponse(BaseModel):
     TaskID: int
     CreatorID: int
@@ -40,7 +50,7 @@ class TaskSearchResponse(BaseModel):
     RecurringStart: bool
     StartTimestampID: int
     EndTimeStampID: int
-    RecurringID: Optional[int]
+    Recurring: Optional[RecurringResponse]
     attendees: List[Attendee]
 
 class TaskUpdateRequest(BaseModel):

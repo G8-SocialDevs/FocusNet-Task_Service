@@ -8,7 +8,7 @@ from app.models.calendar import Calendar
 from app.models.recurring import Recurring
 from app.models.user import User
 from app.models.invitation import Invitation
-from app.schemas.task import TaskResponse, TaskSearchResponse, TaskUpdateRequest, TaskCreateRequest, Attendee
+from app.schemas.task import RecurringResponse, TaskSearchResponse, TaskUpdateRequest, TaskCreateRequest, Attendee
 
 router = APIRouter()
 
@@ -207,6 +207,21 @@ def search_task(task_id: int, user_id: int, db: Session = Depends(get_db)):
 
     attendees += [{"UserID": guest.UserID, "Username": guest.UserName} for guest in accepted_guests]
 
+    recurring_data = None
+    if task.RecurringID:
+        recurring = db.query(Recurring).filter(Recurring.RecurringID == task.RecurringID).first()
+        if recurring:
+            recurring_data = {
+                "RecurringID": recurring.RecurringID,
+                "Title": recurring.Title,
+                "Description": recurring.Description,
+                "Priority": recurring.Priority,
+                "CreatorID": recurring.CreatorID,
+                "Frequency": recurring.Frequency,
+                "DayNameFrequency": recurring.DayNameFrequency,
+                "DayFrequency": recurring.DayFrequency
+            }
+
     return {
         "TaskID": task.TaskID,
         "CreatorID": task.CreatorID,
@@ -216,7 +231,7 @@ def search_task(task_id: int, user_id: int, db: Session = Depends(get_db)):
         "StartTimestampID": task.StartTimestampID,
         "EndTimeStampID": task.EndTimeStampID,
         "RecurringStart": task.RecurringStart,
-        "RecurringID": task.RecurringID,
+        "Recurring": recurring_data,
         "attendees": attendees
     }
 
@@ -253,6 +268,21 @@ async def list_user_tasks(user_id: int, db: Session = Depends(get_db)):
 
         attendees += [{"UserID": guest.UserID, "Username": guest.UserName} for guest in accepted_guests]
 
+        recurring_data = None
+        if task.RecurringID:
+            recurring = db.query(Recurring).filter(Recurring.RecurringID == task.RecurringID).first()
+            if recurring:
+                recurring_data = {
+                    "RecurringID": recurring.RecurringID,
+                    "Title": recurring.Title,
+                    "Description": recurring.Description,
+                    "Priority": recurring.Priority,
+                    "CreatorID": recurring.CreatorID,
+                    "Frequency": recurring.Frequency,
+                    "DayNameFrequency": recurring.DayNameFrequency,
+                    "DayFrequency": recurring.DayFrequency
+                }
+
         result.append({
             "TaskID": task.TaskID,
             "CreatorID": task.CreatorID,
@@ -262,7 +292,7 @@ async def list_user_tasks(user_id: int, db: Session = Depends(get_db)):
             "StartTimestampID": task.StartTimestampID,
             "EndTimeStampID": task.EndTimeStampID,
             "RecurringStart": task.RecurringStart,
-            "RecurringID": task.RecurringID,
+            "Recurring": recurring_data,
             "attendees": attendees
         })
 

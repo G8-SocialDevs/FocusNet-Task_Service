@@ -47,6 +47,11 @@ async def list_invitations(user_id: int, db: Session = Depends(get_db)):
     invitations = db.query(Invitation).filter(Invitation.GuestID == user_id).all()
     return invitations
 
+@router.get("/invitation/list_prop/{user_id}", response_model=List[InvitationResponse])
+async def list_invitations_prop(user_id: int, db: Session = Depends(get_db)):
+    invitations = db.query(Invitation).filter(Invitation.CreatorID == user_id).all()
+    return invitations
+
 
 @router.put("/invitation/respond/{invitation_id}", response_model=dict)
 async def respond_invitation(invitation_id: int, response_data: InvitationUpdateRequest, db: Session = Depends(get_db)):
